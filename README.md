@@ -12,10 +12,10 @@ ChatGPT/agente -> MCP Gateway -> SkrbeCom Bridge -> @skrbe/xcoder -> máquina lo
 npm install -D github:willfeerr/xcoder#main
 ```
 
-Para um build reproduzível, fixe o commit:
+Para um build reproduzível, fixe um commit funcional:
 
 ```bash
-npm install -D github:willfeerr/xcoder#f8722c041802b2923137b2865c0ed15f35806fd9
+npm install -D github:willfeerr/xcoder#c000c52cf0439e081f13966009c1a06ec0237606
 ```
 
 O script `prepare` compila o TypeScript durante a instalação Git.
