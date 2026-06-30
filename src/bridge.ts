@@ -12,20 +12,13 @@ export class SkrbeComBridge extends EventEmitter {
   #pongReceived = true;
   #registration?: BridgeRegistration;
 
-  constructor(private readonly config: AgentConfig) {
-    super();
-  }
+  constructor(private readonly config: AgentConfig) { super(); }
 
-  connect(): void {
-    this.#stopped = false;
-    this.#open();
-  }
+  connect(): void { this.#stopped = false; this.#open(); }
 
   register(registration: Omit<BridgeRegistration, "type">): void {
     this.#registration = { type: "register", ...registration };
-    if (this.#authenticated && this.#socket?.readyState === WebSocket.OPEN) {
-      this.send(this.#registration);
-    }
+    if (this.#authenticated && this.#socket?.readyState === WebSocket.OPEN) this.send(this.#registration);
   }
 
   stop(): void {
@@ -37,9 +30,7 @@ export class SkrbeComBridge extends EventEmitter {
   }
 
   send(message: unknown): void {
-    if (this.#socket?.readyState !== WebSocket.OPEN) {
-      throw new Error("SkrbeCom Bridge não está conectado.");
-    }
+    if (this.#socket?.readyState !== WebSocket.OPEN) throw new Error("SkrbeCom Bridge não está conectado.");
     this.#socket.send(JSON.stringify(message));
   }
 
@@ -61,36 +52,26 @@ export class SkrbeComBridge extends EventEmitter {
       this.emit("socket_open");
     });
 
-    socket.on("pong", () => {
-      this.#pongReceived = true;
-    });
-
+    socket.on("pong", () => { this.#pongReceived = true; });
     socket.on("message", (data) => {
       try {
         const message = JSON.parse(data.toString()) as BridgeMessage;
-
         if (isType(message, "authenticated")) {
           this.#authenticated = true;
           this.emit("authenticated", message);
           if (this.#registration) this.send(this.#registration);
           return;
         }
-
         if (isType(message, "registered")) {
           this.emit("registered", message);
           this.emit("connected");
           return;
         }
-
         if (isType(message, "auth_failed")) {
-          const error = new Error(
-            String(message.error ?? "Autenticação recusada pelo SkrbeCom Bridge."),
-          );
-          this.emit("error", error);
+          this.emit("error", new Error(String(message.error ?? "Autenticação recusada pelo SkrbeCom Bridge.")));
           socket.close(4001, "auth failed");
           return;
         }
-
         this.emit("message", message);
       } catch (error) {
         this.emit("error", error);
@@ -103,21 +84,17 @@ export class SkrbeComBridge extends EventEmitter {
       this.emit("disconnected");
       if (!this.#stopped) this.#scheduleReconnect();
     });
-
     socket.on("error", (error) => this.emit("error", error));
   }
 
   #scheduleReconnect(): void {
     this.#attempt += 1;
-    const exponential = Math.min(
-      this.config.reconnectMaxMs,
-      this.config.reconnectMinMs * 2 ** Math.min(this.#attempt - 1, 8),
-    );
+    const exponential = Math.min(this.config.reconnectMaxMs, this.config.reconnectMinMs * 2 ** Math.min(this.#attempt - 1, 8));
     const jitter = Math.floor(Math.random() * Math.max(100, exponential * 0.2));
     this.#reconnectTimer = setTimeout(() => this.#open(), exponential + jitter);
   }
 }
 
 function isType(message: BridgeMessage, type: string): message is Record<string, unknown> {
-  return typeof message === "object" && message !== null && message.type === type;
+  return typeof message === "object" && message !== null && "type" in message && message.type === type;
 }
