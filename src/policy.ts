@@ -7,7 +7,7 @@ export function isAutomaticallyAllowed(config: AgentConfig, tool: ToolDefinition
   if (config.permission === "full-control") return true;
   if (config.permission === "ask") return false;
   if (AUTO_APPROVED_RISKS.has(tool.risk)) return true;
-  return tool.name === "process.exec" && isRecord(input) && typeof input.command === "string"
+  return tool.name === "exec" && isRecord(input) && typeof input.command === "string"
     ? isSafeDiagnosticCommand(input.command)
     : false;
 }
