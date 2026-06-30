@@ -1,20 +1,336 @@
-import { promises as fs } from "node:fs";
-import path from "node:path";
+import { fork, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chromium, firefox, webkit, type Browser, type BrowserContext, type Page } from "playwright";
+import { createRequire } from "node:module";
+import path from "node:path";
 import type { ToolDefinition } from "./types.js";
-import { asObject, optionalBoolean, optionalNumber, optionalString, requiredString } from "./runtime.js";
-interface BrowserSession { id: string; browser: Browser; context: BrowserContext; page: Page; console: Array<Record<string, unknown>>; network: Array<Record<string, unknown>>; }
-const sessions = new Map<string, BrowserSession>();
-function getSession(id: string): BrowserSession { const session = sessions.get(id); if (!session) throw new Error(`Sessão de navegador não encontrada: ${id}`); return session; }
+import {
+  asObject,
+  optionalBoolean,
+  optionalNumber,
+  optionalString,
+  requiredString,
+} from "./runtime.js";
+
+interface WorkerRequest {
+  id: string;
+  method: string;
+  params: Record<string, unknown>;
+}
+
+interface WorkerResponse {
+  id: string;
+  result?: unknown;
+  error?: string;
+}
+
+interface PendingRequest {
+  resolve: (value: unknown) => void;
+  reject: (reason: Error) => void;
+  timer: NodeJS.Timeout;
+}
+
+let worker: ChildProcess | undefined;
+let workerStderr = "";
+const pending = new Map<string, PendingRequest>();
+
+function resolveWorkerPath(): string {
+  const projectRequire = createRequire(path.join(process.cwd(), "package.json"));
+  const packageSpecifier = ["@skrbe", "xcoder", "browser-worker"].join("/");
+  return projectRequire.resolve(packageSpecifier);
+}
+
+function ensureWorker(): ChildProcess {
+  if (worker?.connected) return worker;
+
+  const workerPath = resolveWorkerPath();
+  const child = fork(workerPath, [], {
+    env: process.env,
+    execArgv: [],
+    stdio: ["ignore", "ignore", "pipe", "ipc"],
+  });
+
+  workerStderr = "";
+  child.stderr?.on("data", (chunk: Buffer | string) => {
+    workerStderr = (workerStderr + chunk.toString()).slice(-64_000);
+  });
+
+  child.on("message", (message: WorkerResponse) => {
+    if (!message || typeof message.id !== "string") return;
+    const request = pending.get(message.id);
+    if (!request) return;
+    clearTimeout(request.timer);
+    pending.delete(message.id);
+    if (message.error) request.reject(new Error(message.error));
+    else request.resolve(message.result);
+  });
+
+  const rejectAll = (reason: string) => {
+    for (const request of pending.values()) {
+      clearTimeout(request.timer);
+      request.reject(new Error(reason));
+    }
+    pending.clear();
+  };
+
+  child.on("error", (error) => {
+    rejectAll(`Falha no worker Playwright: ${error.message}`);
+    worker = undefined;
+  });
+
+  child.on("exit", (code, signal) => {
+    const details = workerStderr.trim();
+    rejectAll(
+      `Worker Playwright encerrou com code=${String(code)} signal=${String(signal)}${
+        details ? `: ${details}` : ""
+      }`,
+    );
+    worker = undefined;
+  });
+
+  worker = child;
+  return child;
+}
+
+async function callWorker(
+  method: string,
+  params: Record<string, unknown>,
+  timeoutMs = 120_000,
+): Promise<unknown> {
+  const child = ensureWorker();
+  const id = randomUUID();
+  const request: WorkerRequest = { id, method, params };
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error(`Timeout de ${timeoutMs}ms na operação Playwright ${method}.`));
+    }, timeoutMs);
+
+    pending.set(id, { resolve, reject, timer });
+    child.send(request, (error) => {
+      if (!error) return;
+      clearTimeout(timer);
+      pending.delete(id);
+      reject(error);
+    });
+  }).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/executable doesn't exist|browser.*not found|install/i.test(message)) {
+      throw new Error(
+        `${message}\nInstale o navegador com: pnpm exec xcoder browser install chromium`,
+      );
+    }
+    throw error;
+  });
+}
+
 export const browserTools: ToolDefinition[] = [
-  { name: "browser_open", description: "Abre URL em Chromium, Firefox ou WebKit e cria uma sessão reutilizável.", risk: "execute", inputSchema: { type: "object", properties: { url: { type: "string" }, browser: { type: "string", enum: ["chromium", "firefox", "webkit"] }, headless: { type: "boolean" }, width: { type: "number" }, height: { type: "number" }, timeoutMs: { type: "number" } }, required: ["url"], additionalProperties: false }, async execute(input) { const values = asObject(input); const name = optionalString(values, "browser", "chromium")!; const browserType = name === "firefox" ? firefox : name === "webkit" ? webkit : chromium; const browser = await browserType.launch({ headless: optionalBoolean(values, "headless", true) }); const context = await browser.newContext({ viewport: { width: optionalNumber(values, "width", 1440), height: optionalNumber(values, "height", 900) } }); const page = await context.newPage(); const id = randomUUID(); const session: BrowserSession = { id, browser, context, page, console: [], network: [] }; page.on("console", (message) => session.console.push({ type: message.type(), text: message.text(), at: new Date().toISOString() })); page.on("pageerror", (error) => session.console.push({ type: "pageerror", text: error.message, at: new Date().toISOString() })); page.on("response", (response) => { if (response.status() >= 400) session.network.push({ url: response.url(), status: response.status(), method: response.request().method() }); }); page.on("requestfailed", (request) => session.network.push({ url: request.url(), method: request.method(), error: request.failure()?.errorText })); sessions.set(id, session); const response = await page.goto(requiredString(values, "url"), { waitUntil: "domcontentloaded", timeout: optionalNumber(values, "timeoutMs", 30_000) }); return { sessionId: id, browser: name, url: page.url(), title: await page.title(), status: response?.status() ?? null }; } },
-  { name: "browser_snapshot", description: "Retorna URL, título, texto visível e opcionalmente HTML da página.", risk: "read", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, includeHtml: { type: "boolean" }, maxChars: { type: "number" } }, required: ["sessionId"], additionalProperties: false }, async execute(input) { const values = asObject(input); const session = getSession(requiredString(values, "sessionId")); const max = Math.max(1, optionalNumber(values, "maxChars", 100_000)); const text = (await session.page.locator("body").innerText()).slice(0, max); const html = optionalBoolean(values, "includeHtml") ? (await session.page.content()).slice(0, max) : undefined; return { sessionId: session.id, url: session.page.url(), title: await session.page.title(), text, html }; } },
-  { name: "browser_screenshot", description: "Captura screenshot e retorna imagem MCP, além de salvar opcionalmente no workspace.", risk: "read", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, path: { type: "string" }, fullPage: { type: "boolean" }, selector: { type: "string" } }, required: ["sessionId"], additionalProperties: false }, async execute(input, context) { const values = asObject(input); const session = getSession(requiredString(values, "sessionId")); const file = optionalString(values, "path"); const target = file ? context.resolvePath(file) : undefined; if (target) await fs.mkdir(path.dirname(target), { recursive: true }); const selector = optionalString(values, "selector"); const buffer = selector ? await session.page.locator(selector).screenshot({ path: target }) : await session.page.screenshot({ path: target, fullPage: optionalBoolean(values, "fullPage", true) }); return { content: [{ type: "image", data: buffer.toString("base64"), mimeType: "image/png" }], sessionId: session.id, path: target, bytes: buffer.byteLength }; } },
-  { name: "browser_click", description: "Clica em um elemento por locator Playwright.", risk: "execute", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, selector: { type: "string" }, timeoutMs: { type: "number" } }, required: ["sessionId", "selector"], additionalProperties: false }, async execute(input) { const values = asObject(input); const session = getSession(requiredString(values, "sessionId")); await session.page.locator(requiredString(values, "selector")).click({ timeout: optionalNumber(values, "timeoutMs", 30_000) }); return { sessionId: session.id, url: session.page.url() }; } },
-  { name: "browser_fill", description: "Preenche um campo usando locator Playwright.", risk: "execute", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, selector: { type: "string" }, value: { type: "string" } }, required: ["sessionId", "selector", "value"], additionalProperties: false }, async execute(input) { const values = asObject(input); const session = getSession(requiredString(values, "sessionId")); await session.page.locator(requiredString(values, "selector")).fill(requiredString(values, "value")); return { sessionId: session.id }; } },
-  { name: "browser_evaluate", description: "Executa JavaScript serializável na página ativa.", risk: "execute", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, expression: { type: "string" } }, required: ["sessionId", "expression"], additionalProperties: false }, async execute(input) { const values = asObject(input); const session = getSession(requiredString(values, "sessionId")); const expression = requiredString(values, "expression"); const value = await session.page.evaluate((source) => (0, eval)(source), expression); return { sessionId: session.id, value }; } },
-  { name: "browser_console", description: "Retorna mensagens de console e erros da página.", risk: "read", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, clear: { type: "boolean" } }, required: ["sessionId"], additionalProperties: false }, async execute(input) { const values = asObject(input); const session = getSession(requiredString(values, "sessionId")); const messages = [...session.console]; if (optionalBoolean(values, "clear")) session.console.length = 0; return { sessionId: session.id, messages }; } },
-  { name: "browser_network", description: "Retorna respostas HTTP com erro e requests falhos observados.", risk: "read", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, clear: { type: "boolean" } }, required: ["sessionId"], additionalProperties: false }, async execute(input) { const values = asObject(input); const session = getSession(requiredString(values, "sessionId")); const events = [...session.network]; if (optionalBoolean(values, "clear")) session.network.length = 0; return { sessionId: session.id, events }; } },
-  { name: "browser_close", description: "Fecha contexto e navegador da sessão.", risk: "destructive", inputSchema: { type: "object", properties: { sessionId: { type: "string" } }, required: ["sessionId"], additionalProperties: false }, async execute(input) { const id = requiredString(asObject(input), "sessionId"); const session = getSession(id); await session.context.close(); await session.browser.close(); sessions.delete(id); return { sessionId: id, closed: true }; } }
+  {
+    name: "browser_open",
+    description: "Abre URL em Chromium, Firefox ou WebKit em worker isolado.",
+    risk: "execute",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string" },
+        browser: { type: "string", enum: ["chromium", "firefox", "webkit"] },
+        headless: { type: "boolean" },
+        width: { type: "number" },
+        height: { type: "number" },
+        timeoutMs: { type: "number" },
+      },
+      required: ["url"],
+      additionalProperties: false,
+    },
+    async execute(input) {
+      const values = asObject(input);
+      const timeoutMs = optionalNumber(values, "timeoutMs", 30_000);
+      return callWorker(
+        "open",
+        {
+          url: requiredString(values, "url"),
+          browser: optionalString(values, "browser", "chromium"),
+          headless: optionalBoolean(values, "headless", true),
+          width: optionalNumber(values, "width", 1440),
+          height: optionalNumber(values, "height", 900),
+          timeoutMs,
+        },
+        timeoutMs + 10_000,
+      );
+    },
+  },
+  {
+    name: "browser_snapshot",
+    description: "Retorna URL, título, texto visível e opcionalmente HTML da página.",
+    risk: "read",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string" },
+        includeHtml: { type: "boolean" },
+        maxChars: { type: "number" },
+      },
+      required: ["sessionId"],
+      additionalProperties: false,
+    },
+    async execute(input) {
+      const values = asObject(input);
+      return callWorker("snapshot", {
+        sessionId: requiredString(values, "sessionId"),
+        includeHtml: optionalBoolean(values, "includeHtml"),
+        maxChars: optionalNumber(values, "maxChars", 100_000),
+      });
+    },
+  },
+  {
+    name: "browser_screenshot",
+    description: "Captura screenshot da página ou de um elemento.",
+    risk: "read",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string" },
+        path: { type: "string" },
+        fullPage: { type: "boolean" },
+        selector: { type: "string" },
+      },
+      required: ["sessionId"],
+      additionalProperties: false,
+    },
+    async execute(input, context) {
+      const values = asObject(input);
+      const requestedPath = optionalString(values, "path");
+      return callWorker("screenshot", {
+        sessionId: requiredString(values, "sessionId"),
+        path: requestedPath ? context.resolvePath(requestedPath) : undefined,
+        fullPage: optionalBoolean(values, "fullPage", true),
+        selector: optionalString(values, "selector"),
+      });
+    },
+  },
+  {
+    name: "browser_click",
+    description: "Clica em um elemento usando locator Playwright.",
+    risk: "execute",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string" },
+        selector: { type: "string" },
+        timeoutMs: { type: "number" },
+      },
+      required: ["sessionId", "selector"],
+      additionalProperties: false,
+    },
+    async execute(input) {
+      const values = asObject(input);
+      return callWorker("click", {
+        sessionId: requiredString(values, "sessionId"),
+        selector: requiredString(values, "selector"),
+        timeoutMs: optionalNumber(values, "timeoutMs", 30_000),
+      });
+    },
+  },
+  {
+    name: "browser_fill",
+    description: "Preenche um campo usando locator Playwright.",
+    risk: "execute",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string" },
+        selector: { type: "string" },
+        value: { type: "string" },
+      },
+      required: ["sessionId", "selector", "value"],
+      additionalProperties: false,
+    },
+    async execute(input) {
+      const values = asObject(input);
+      return callWorker("fill", {
+        sessionId: requiredString(values, "sessionId"),
+        selector: requiredString(values, "selector"),
+        value: requiredString(values, "value"),
+      });
+    },
+  },
+  {
+    name: "browser_evaluate",
+    description: "Executa uma expressão JavaScript serializável na página ativa.",
+    risk: "execute",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string" },
+        expression: { type: "string" },
+      },
+      required: ["sessionId", "expression"],
+      additionalProperties: false,
+    },
+    async execute(input) {
+      const values = asObject(input);
+      return callWorker("evaluate", {
+        sessionId: requiredString(values, "sessionId"),
+        expression: requiredString(values, "expression"),
+      });
+    },
+  },
+  {
+    name: "browser_console",
+    description: "Retorna mensagens de console e erros da página.",
+    risk: "read",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string" },
+        clear: { type: "boolean" },
+      },
+      required: ["sessionId"],
+      additionalProperties: false,
+    },
+    async execute(input) {
+      const values = asObject(input);
+      return callWorker("console", {
+        sessionId: requiredString(values, "sessionId"),
+        clear: optionalBoolean(values, "clear"),
+      });
+    },
+  },
+  {
+    name: "browser_network",
+    description: "Retorna respostas HTTP com erro e requests falhos observados.",
+    risk: "read",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string" },
+        clear: { type: "boolean" },
+      },
+      required: ["sessionId"],
+      additionalProperties: false,
+    },
+    async execute(input) {
+      const values = asObject(input);
+      return callWorker("network", {
+        sessionId: requiredString(values, "sessionId"),
+        clear: optionalBoolean(values, "clear"),
+      });
+    },
+  },
+  {
+    name: "browser_close",
+    description: "Fecha contexto e navegador da sessão.",
+    risk: "destructive",
+    inputSchema: {
+      type: "object",
+      properties: { sessionId: { type: "string" } },
+      required: ["sessionId"],
+      additionalProperties: false,
+    },
+    async execute(input) {
+      return callWorker("close", {
+        sessionId: requiredString(asObject(input), "sessionId"),
+      });
+    },
+  },
 ];
