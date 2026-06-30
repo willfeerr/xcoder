@@ -1,14 +1,24 @@
 {
   "name": "@skrbe/xcoder",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Agente local de programação conectado ao SkrbeCom Bridge e MCP Gateway.",
   "type": "module",
-  "bin": { "xcoder": "./dist/cli.js", "skrbe-dev-agent": "./dist/cli.js" },
-  "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-    "./next": { "types": "./dist/next.d.ts", "import": "./dist/next.js" }
+  "bin": {
+    "xcoder": "./dist/cli.js",
+    "skrbe-dev-agent": "./dist/cli.js"
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./next": {
+      "types": "./dist/next.d.ts",
+      "import": "./dist/next.js"
+    },
+    "./browser-worker": "./dist/browser-worker.js"
+  },
+  "files": ["dist", "README.md", "LICENSE", "ARCHITECTURE.md"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/cli.ts",
@@ -16,9 +26,28 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepare": "npm run build"
   },
-  "engines": { "node": ">=20.11" },
-  "dependencies": { "playwright": "^1.59.1", "ws": "^8.18.3" },
-  "devDependencies": { "@types/node": "^22.15.0", "@types/ws": "^8.18.1", "tsx": "^4.20.3", "typescript": "^5.8.3" },
-  "keywords": ["skrbe", "mcp", "agent", "developer-tools", "automation", "nextjs", "playwright", "git-worktree"],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "dependencies": {
+    "playwright": "1.61.1",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
+  },
+  "keywords": [
+    "skrbe",
+    "mcp",
+    "agent",
+    "developer-tools",
+    "automation",
+    "nextjs",
+    "playwright",
+    "git-worktree"
+  ],
   "license": "MIT"
 }
