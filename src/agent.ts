@@ -6,6 +6,7 @@ import type {
   AgentConfig,
   ApprovalDecision,
   BridgeMessage,
+  NativeToolCall,
   RpcRequest,
   RpcResponse,
   ToolDefinition,
@@ -28,26 +29,68 @@ export class SkrbeDevAgent {
   }
 
   start(): void {
-    this.bridge.on("message", (message: BridgeMessage) => { void this.handleMessage(message); });
-    this.bridge.on("connected", () => console.log(`[xcoder] conectado como ${this.config.agentId}`));
+    this.bridge.on("message", (message: BridgeMessage) => void this.handleMessage(message));
+    this.bridge.on("socket_open", () => {
+      this.bridge.register({
+        serverId: this.config.serverId,
+        name: this.config.serverName,
+        prefix: this.config.prefix,
+        tools: [...this.toolMap.values()].map(({ name, description, inputSchema }) => ({
+          name,
+          description,
+          inputSchema,
+        })),
+      });
+    });
+    this.bridge.on("connected", () => {
+      const names = [...this.toolMap.keys()]
+        .map((name) => `${this.config.prefix}__${name}`)
+        .join(", ");
+      console.log(`[xcoder] registrado como ${this.config.serverId}; tools: ${names}`);
+    });
     this.bridge.on("disconnected", () => console.warn("[xcoder] desconectado; tentando reconectar"));
     this.bridge.on("error", (error) => console.error("[xcoder] bridge error", error));
     this.bridge.connect();
   }
 
-  stop(): void { this.bridge.stop(); }
+  stop(): void {
+    this.bridge.stop();
+  }
 
   private async handleMessage(message: BridgeMessage): Promise<void> {
-    if (message.type === "event" && message.event === "approval.decision") {
+    if (isBridgeEvent(message, "approval.decision")) {
       const decision = message.data as ApprovalDecision;
       this.approvals.get(decision.requestId)?.(decision);
       return;
     }
-    if (message.type !== "request") return;
+
+    if (isNativeToolCall(message)) {
+      try {
+        const result = await this.callTool(message.id, message.method, message.params);
+        this.bridge.send({ id: message.id, result });
+      } catch (error) {
+        this.bridge.send({
+          id: message.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
+    if (!isLegacyRpcRequest(message)) return;
 
     const response: RpcResponse = { type: "response", id: message.id };
-    try { response.result = await this.handleRequest(message); }
-    catch (error) {
+    try {
+      if (message.method === "agent.describe") {
+        response.result = this.describe();
+      } else if (message.method === "tools.call") {
+        const params = asObject(message.params);
+        if (typeof params.name !== "string") throw new Error("tools.call requer name.");
+        response.result = await this.callTool(message.id, params.name, params.input);
+      } else {
+        throw new Error(`Método não suportado: ${message.method}`);
+      }
+    } catch (error) {
       response.error = {
         code: "AGENT_ERROR",
         message: error instanceof Error ? error.message : String(error),
@@ -56,29 +99,34 @@ export class SkrbeDevAgent {
     this.bridge.send(response);
   }
 
-  private async handleRequest(request: RpcRequest): Promise<unknown> {
-    if (request.method === "agent.describe") {
-      return {
-        agentId: this.config.agentId,
-        workspace: this.config.workspace,
-        permission: this.config.permission,
-        tools: [...this.toolMap.values()].map(({ name, description, risk }) => ({ name, description, risk })),
-      };
-    }
-    if (request.method !== "tools.call") throw new Error(`Método não suportado: ${request.method}`);
+  private describe(): unknown {
+    return {
+      agentId: this.config.agentId,
+      serverId: this.config.serverId,
+      prefix: this.config.prefix,
+      workspace: this.config.workspace,
+      permission: this.config.permission,
+      tools: [...this.toolMap.values()].map(({ name, description, risk, inputSchema }) => ({
+        name,
+        description,
+        risk,
+        inputSchema,
+      })),
+    };
+  }
 
-    const params = asObject(request.params);
-    const name = params.name;
-    const input = params.input;
-    if (typeof name !== "string") throw new Error("tools.call requer name.");
+  private async callTool(requestId: string, method: string, input: unknown): Promise<unknown> {
+    const prefix = `${this.config.prefix}__`;
+    const normalizedMethod = method.startsWith(prefix) ? method.slice(prefix.length) : method;
+    const tool = this.toolMap.get(normalizedMethod);
+    if (!tool) throw new Error(`Tool desconhecida: ${method}`);
 
-    const tool = this.toolMap.get(name);
-    if (!tool) throw new Error(`Tool desconhecida: ${name}`);
+    const approved =
+      this.rememberedApprovals.has(tool.name) ||
+      isAutomaticallyAllowed(this.config, tool, input);
+    if (!approved) await this.requestApproval(requestId, tool, input);
 
-    const approved = this.rememberedApprovals.has(name) || isAutomaticallyAllowed(this.config, tool, input);
-    if (!approved) await this.requestApproval(request.id, tool, input);
-
-    return tool.execute(input, {
+    return tool.execute(input ?? {}, {
       config: this.config,
       resolvePath: this.resolvePath,
     });
@@ -114,6 +162,38 @@ export class SkrbeDevAgent {
       });
     });
   }
+}
+
+function isNativeToolCall(message: BridgeMessage): message is NativeToolCall {
+  return (
+    typeof message === "object" &&
+    message !== null &&
+    !("type" in message) &&
+    typeof message.id === "string" &&
+    typeof message.method === "string"
+  );
+}
+
+function isLegacyRpcRequest(message: BridgeMessage): message is RpcRequest {
+  return (
+    typeof message === "object" &&
+    message !== null &&
+    message.type === "request" &&
+    typeof message.id === "string" &&
+    typeof message.method === "string"
+  );
+}
+
+function isBridgeEvent(
+  message: BridgeMessage,
+  event: string,
+): message is { type: "event"; event: string; data?: unknown } {
+  return (
+    typeof message === "object" &&
+    message !== null &&
+    message.type === "event" &&
+    message.event === event
+  );
 }
 
 function asObject(value: unknown): Record<string, unknown> {
