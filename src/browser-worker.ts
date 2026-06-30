@@ -233,6 +233,164 @@ async function execute(method: string, params: Record<string, unknown>): Promise
       return { sessionId: session.id, events };
     }
 
+    case "record": {
+      const name = optionalString(params, "browser", "chromium")!;
+      const browserType = name === "firefox" ? firefox : name === "webkit" ? webkit : chromium;
+      const videoPath = requiredString(params, "path");
+      const tracePath = optionalString(params, "tracePath");
+      const width = Math.max(320, optionalNumber(params, "width", 1440));
+      const height = Math.max(240, optionalNumber(params, "height", 900));
+      const durationMs = Math.min(120_000, Math.max(1_000, optionalNumber(params, "durationMs", 15_000)));
+      const timeoutMs = Math.max(1_000, optionalNumber(params, "timeoutMs", 30_000));
+      const autoScroll = optionalBoolean(params, "autoScroll", true);
+      const scrollStep = Math.max(1, optionalNumber(params, "scrollStep", 420));
+      const scrollIntervalMs = Math.max(50, optionalNumber(params, "scrollIntervalMs", 700));
+      const artifactDir = path.dirname(videoPath);
+      const temporaryVideoDir = path.join(
+        artifactDir,
+        `.xcoder-video-${randomUUID()}`,
+      );
+
+      await fs.mkdir(artifactDir, { recursive: true });
+      if (tracePath) await fs.mkdir(path.dirname(tracePath), { recursive: true });
+      await fs.mkdir(temporaryVideoDir, { recursive: true });
+
+      const browser = await browserType.launch({
+        headless: optionalBoolean(params, "headless", true),
+      });
+      const context = await browser.newContext({
+        viewport: { width, height },
+        recordVideo: {
+          dir: temporaryVideoDir,
+          size: { width, height },
+        },
+      });
+
+      const consoleMessages: Array<Record<string, unknown>> = [];
+      const networkEvents: Array<Record<string, unknown>> = [];
+      const page = await context.newPage();
+      const video = page.video();
+      const startedAt = Date.now();
+      let status: number | null = null;
+      let title = "";
+      let finalUrl = "";
+      let animationSummary: unknown = null;
+
+      page.on("console", (message) => {
+        consoleMessages.push({
+          type: message.type(),
+          text: message.text(),
+          at: new Date().toISOString(),
+        });
+      });
+      page.on("pageerror", (error) => {
+        consoleMessages.push({
+          type: "pageerror",
+          text: error.message,
+          at: new Date().toISOString(),
+        });
+      });
+      page.on("response", (response) => {
+        if (response.status() >= 400) {
+          networkEvents.push({
+            url: response.url(),
+            status: response.status(),
+            method: response.request().method(),
+          });
+        }
+      });
+      page.on("requestfailed", (request) => {
+        networkEvents.push({
+          url: request.url(),
+          method: request.method(),
+          error: request.failure()?.errorText,
+        });
+      });
+
+      try {
+        if (tracePath) {
+          await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+        }
+
+        const response = await page.goto(requiredString(params, "url"), {
+          waitUntil: "domcontentloaded",
+          timeout: timeoutMs,
+        });
+        status = response?.status() ?? null;
+        title = await page.title();
+        finalUrl = page.url();
+
+        await page.waitForTimeout(Math.min(1_500, Math.floor(durationMs / 4)));
+
+        if (autoScroll) {
+          const remaining = Math.max(0, durationMs - (Date.now() - startedAt));
+          await page.evaluate(
+            async ({ totalMs, step, intervalMs }) => {
+              const started = performance.now();
+              let direction = 1;
+              while (performance.now() - started < totalMs) {
+                const maxScroll = Math.max(0, document.documentElement.scrollHeight - innerHeight);
+                const next = Math.min(maxScroll, Math.max(0, scrollY + step * direction));
+                scrollTo({ top: next, behavior: "smooth" });
+                if (next >= maxScroll) direction = -1;
+                if (next <= 0) direction = 1;
+                await new Promise((resolve) => setTimeout(resolve, intervalMs));
+              }
+            },
+            {
+              totalMs: remaining,
+              step: scrollStep,
+              intervalMs: scrollIntervalMs,
+            },
+          );
+        } else {
+          const remaining = Math.max(0, durationMs - (Date.now() - startedAt));
+          if (remaining > 0) await page.waitForTimeout(remaining);
+        }
+
+        animationSummary = await page.evaluate(() => {
+          const animations = document.getAnimations();
+          return {
+            total: animations.length,
+            running: animations.filter((animation) => animation.playState === "running").length,
+            paused: animations.filter((animation) => animation.playState === "paused").length,
+            finished: animations.filter((animation) => animation.playState === "finished").length,
+            scrollY,
+            scrollHeight: document.documentElement.scrollHeight,
+            viewport: { width: innerWidth, height: innerHeight },
+          };
+        });
+
+        if (tracePath) await context.tracing.stop({ path: tracePath });
+        await context.close();
+        if (video) await video.saveAs(videoPath);
+        const stats = await fs.stat(videoPath);
+
+        return {
+          browser: name,
+          url: finalUrl,
+          title,
+          status,
+          path: videoPath,
+          tracePath,
+          bytes: stats.size,
+          durationMs: Date.now() - startedAt,
+          animationSummary,
+          console: consoleMessages,
+          network: networkEvents,
+        };
+      } catch (error) {
+        if (tracePath) {
+          await context.tracing.stop({ path: tracePath }).catch(() => undefined);
+        }
+        await context.close().catch(() => undefined);
+        throw error;
+      } finally {
+        await browser.close().catch(() => undefined);
+        await fs.rm(temporaryVideoDir, { recursive: true, force: true }).catch(() => undefined);
+      }
+    }
+
     case "close": {
       const id = requiredString(params, "sessionId");
       const session = getSession(id);
