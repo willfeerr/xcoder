@@ -44,11 +44,14 @@ export const tools: ToolDefinition[] = [
       if (typeof inputPath !== "string") throw new Error("path inválido.");
       const target = context.resolvePath(inputPath);
       const entries = await fs.readdir(target, { withFileTypes: true });
-      return entries.map((entry) => ({
-        name: entry.name,
-        path: path.relative(context.config.workspace, path.join(target, entry.name)),
-        type: entry.isDirectory() ? "directory" : entry.isFile() ? "file" : "other",
-      }));
+      return {
+        path: target,
+        entries: entries.map((entry) => ({
+          name: entry.name,
+          path: path.relative(context.config.workspace, path.join(target, entry.name)),
+          type: entry.isDirectory() ? "directory" : entry.isFile() ? "file" : "other",
+        })),
+      };
     },
   },
   {
