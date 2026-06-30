@@ -1,6 +1,6 @@
 {
   "name": "@skrbe/xcoder",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Agente local de programação conectado ao SkrbeCom Bridge e MCP Gateway.",
   "type": "module",
   "bin": {
@@ -11,6 +11,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./next": {
+      "types": "./dist/next.d.ts",
+      "import": "./dist/next.js"
     }
   },
   "files": ["dist", "README.md", "LICENSE"],
@@ -29,6 +33,6 @@
     "tsx": "^4.20.3",
     "typescript": "^5.8.3"
   },
-  "keywords": ["skrbe", "mcp", "agent", "developer-tools", "automation"],
+  "keywords": ["skrbe", "mcp", "agent", "developer-tools", "automation", "nextjs"],
   "license": "MIT"
 }
