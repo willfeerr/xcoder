@@ -326,12 +326,19 @@ async function execute(method: string, params: Record<string, unknown>): Promise
           const remaining = Math.max(0, durationMs - (Date.now() - startedAt));
           await page.evaluate(
             async ({ totalMs, step, intervalMs }) => {
-              const started = performance.now();
+              const pageWindow = globalThis as any;
+              const started = pageWindow.performance.now();
               let direction = 1;
-              while (performance.now() - started < totalMs) {
-                const maxScroll = Math.max(0, document.documentElement.scrollHeight - innerHeight);
-                const next = Math.min(maxScroll, Math.max(0, scrollY + step * direction));
-                scrollTo({ top: next, behavior: "smooth" });
+              while (pageWindow.performance.now() - started < totalMs) {
+                const maxScroll = Math.max(
+                  0,
+                  pageWindow.document.documentElement.scrollHeight - pageWindow.innerHeight,
+                );
+                const next = Math.min(
+                  maxScroll,
+                  Math.max(0, pageWindow.scrollY + step * direction),
+                );
+                pageWindow.scrollTo({ top: next, behavior: "smooth" });
                 if (next >= maxScroll) direction = -1;
                 if (next <= 0) direction = 1;
                 await new Promise((resolve) => setTimeout(resolve, intervalMs));
@@ -349,15 +356,16 @@ async function execute(method: string, params: Record<string, unknown>): Promise
         }
 
         animationSummary = await page.evaluate(() => {
-          const animations = document.getAnimations();
+          const pageWindow = globalThis as any;
+          const animations = pageWindow.document.getAnimations() as Array<{ playState: string }>;
           return {
             total: animations.length,
             running: animations.filter((animation) => animation.playState === "running").length,
             paused: animations.filter((animation) => animation.playState === "paused").length,
             finished: animations.filter((animation) => animation.playState === "finished").length,
-            scrollY,
-            scrollHeight: document.documentElement.scrollHeight,
-            viewport: { width: innerWidth, height: innerHeight },
+            scrollY: pageWindow.scrollY,
+            scrollHeight: pageWindow.document.documentElement.scrollHeight,
+            viewport: { width: pageWindow.innerWidth, height: pageWindow.innerHeight },
           };
         });
 
