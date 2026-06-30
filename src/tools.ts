@@ -24,7 +24,7 @@ export const tools: ToolDefinition[] = [
       const stats = await fs.stat(target);
       if (!stats.isFile()) throw new Error(`Não é um arquivo: ${target}`);
       if (stats.size > context.config.maxReadBytes) throw new Error("Arquivo excede SKRBE_MAX_READ_BYTES.");
-      return { path: target, size: stats.size, content: await fs.readFile(target, "utf8") };
+      return { path: target, size: stats.size, text: await fs.readFile(target, "utf8") };
     },
   },
   {
