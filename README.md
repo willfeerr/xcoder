@@ -6,21 +6,61 @@ Agente local Node.js para dar ao Skrbe MCP Gateway capacidades de programação 
 ChatGPT/agente -> MCP Gateway -> SkrbeCom Bridge -> @skrbe/xcoder -> máquina local
 ```
 
-## Instalação no worker
+## Instalação
 
 ```bash
 npm install -D github:willfeerr/xcoder#main
 ```
 
-Para um build reproduzível, fixe um commit funcional:
+## Next.js: conectar automaticamente com o app
+
+Depois de instalar, execute uma vez:
 
 ```bash
-npm install -D github:willfeerr/xcoder#c000c52cf0439e081f13966009c1a06ec0237606
+npx xcoder init next
 ```
 
-O script `prepare` compila o TypeScript durante a instalação Git.
+O comando cria `instrumentation.ts` na raiz ou em `src/instrumentation.ts`:
 
-## Execução
+```ts
+export async function register() {
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    const { startXCoder } = await import("@skrbe/xcoder/next");
+    startXCoder();
+  }
+}
+```
+
+Configure `.env.local`:
+
+```env
+SKRBE_BRIDGE_URL=wss://bridge.example.com/agents
+SKRBE_BRIDGE_TOKEN=replace-me
+SKRBE_AGENT_ID=my-workstation
+SKRBE_WORKSPACE=.
+SKRBE_PERMISSION=ask
+SKRBE_ROOTS=.
+```
+
+Reinicie o servidor:
+
+```bash
+npm run dev
+```
+
+O XCoder passa a conectar junto com o processo Node do Next.js. Há um singleton global para evitar conexões duplicadas durante HMR.
+
+Caso já exista um `instrumentation.ts`, adicione a importação dinâmica ao `register()` existente em vez de substituí-lo.
+
+## Processo separado
+
+Também é possível executar sem integração com Next.js:
+
+```bash
+npx xcoder
+```
+
+Ou:
 
 ```json
 {
@@ -28,10 +68,6 @@ O script `prepare` compila o TypeScript durante a instalação Git.
     "xcoder": "xcoder"
   }
 }
-```
-
-```bash
-npm run xcoder
 ```
 
 ## Permissões
@@ -47,17 +83,6 @@ Acesso irrestrito exige configuração explícita:
 ```env
 SKRBE_PERMISSION=full-control
 SKRBE_ROOTS=*
-```
-
-## Variáveis principais
-
-```env
-SKRBE_BRIDGE_URL=wss://bridge.example.com/agents
-SKRBE_BRIDGE_TOKEN=replace-me
-SKRBE_AGENT_ID=my-workstation
-SKRBE_WORKSPACE=.
-SKRBE_PERMISSION=ask
-SKRBE_ROOTS=.
 ```
 
 ## Tools iniciais
