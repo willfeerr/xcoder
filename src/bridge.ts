@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import WebSocket from "ws";
-import type { AgentConfig, BridgeMessage } from "./types.js";
+import type { AgentConfig, BridgeMessage, BridgeRegistration } from "./types.js";
 
 export class SkrbeComBridge extends EventEmitter {
   #socket?: WebSocket;
@@ -9,10 +9,16 @@ export class SkrbeComBridge extends EventEmitter {
   #reconnectTimer?: NodeJS.Timeout;
   #attempt = 0;
   #pongReceived = true;
+  #registration?: BridgeRegistration;
 
   constructor(private readonly config: AgentConfig) { super(); }
 
   connect(): void { this.#stopped = false; this.#open(); }
+
+  register(registration: Omit<BridgeRegistration, "type">): void {
+    this.#registration = { type: "register", ...registration };
+    this.send(this.#registration);
+  }
 
   stop(): void {
     this.#stopped = true;
@@ -21,46 +27,52 @@ export class SkrbeComBridge extends EventEmitter {
     this.#socket?.close(1000, "agent stopped");
   }
 
-  send(message: BridgeMessage): void {
+  send(message: unknown): void {
     if (this.#socket?.readyState !== WebSocket.OPEN) throw new Error("SkrbeCom Bridge não está conectado.");
     this.#socket.send(JSON.stringify(message));
   }
 
   #open(): void {
-    const socket = new WebSocket(this.config.bridgeUrl, {
-      headers: {
-        authorization: `Bearer ${this.config.token}`,
-        "x-skrbe-agent-id": this.config.agentId,
-      },
-    });
+    const socket = new WebSocket(this.config.bridgeUrl);
     this.#socket = socket;
 
     socket.on("open", () => {
       this.#attempt = 0;
       this.#pongReceived = true;
-      this.send({
-        type: "event",
-        event: "agent.register",
-        data: {
-          agentId: this.config.agentId,
-          workspace: this.config.workspace,
-          permission: this.config.permission,
-          protocolVersion: 1,
-        },
-      });
+      this.send({ type: "auth", token: this.config.token });
       this.#heartbeat = setInterval(() => {
         if (socket.readyState !== WebSocket.OPEN) return;
         if (!this.#pongReceived) return socket.terminate();
         this.#pongReceived = false;
         socket.ping();
       }, this.config.heartbeatMs);
-      this.emit("connected");
+      this.emit("socket_open");
     });
 
     socket.on("pong", () => { this.#pongReceived = true; });
     socket.on("message", (data) => {
-      try { this.emit("message", JSON.parse(data.toString()) as BridgeMessage); }
-      catch (error) { this.emit("error", error); }
+      try {
+        const message = JSON.parse(data.toString()) as BridgeMessage;
+        if (isType(message, "authenticated")) {
+          this.emit("authenticated", message);
+          if (this.#registration) this.send(this.#registration);
+          return;
+        }
+        if (isType(message, "registered")) {
+          this.emit("registered", message);
+          this.emit("connected");
+          return;
+        }
+        if (isType(message, "auth_failed")) {
+          const error = new Error(String(message.error ?? "Autenticação recusada pelo SkrbeCom Bridge."));
+          this.emit("error", error);
+          socket.close(4001, "auth failed");
+          return;
+        }
+        this.emit("message", message);
+      } catch (error) {
+        this.emit("error", error);
+      }
     });
     socket.on("close", () => {
       if (this.#heartbeat) clearInterval(this.#heartbeat);
@@ -79,4 +91,8 @@ export class SkrbeComBridge extends EventEmitter {
     const jitter = Math.floor(Math.random() * Math.max(100, exponential * 0.2));
     this.#reconnectTimer = setTimeout(() => this.#open(), exponential + jitter);
   }
+}
+
+function isType(message: BridgeMessage, type: string): message is Record<string, unknown> {
+  return typeof message === "object" && message !== null && message.type === type;
 }

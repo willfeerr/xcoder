@@ -24,10 +24,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     .filter(Boolean)
     .map((value) => (value === "*" ? value : path.resolve(workspace, value)));
 
+  const agentId = env.SKRBE_AGENT_ID ?? `xcoder-${process.pid}`;
+
   return {
-    bridgeUrl: env.SKRBE_BRIDGE_URL ?? "ws://127.0.0.1:7331/agents",
+    bridgeUrl: env.SKRBE_BRIDGE_URL ?? "ws://127.0.0.1:7331/bridge",
     token,
-    agentId: env.SKRBE_AGENT_ID ?? `xcoder-${process.pid}`,
+    agentId,
+    serverId: env.SKRBE_SERVER_ID ?? agentId,
+    serverName: env.SKRBE_SERVER_NAME ?? "Skrbe XCoder",
+    prefix: env.SKRBE_PREFIX ?? "xcoder",
     workspace,
     permission,
     roots,
