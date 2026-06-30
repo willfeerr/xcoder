@@ -77,8 +77,11 @@ export class SkrbeDevAgent {
   }
 
   private async callTool(requestId: string, method: string, input: unknown): Promise<unknown> {
-    const prefix = `${this.config.prefix}__`;
-    const normalizedMethod = method.startsWith(prefix) ? method.slice(prefix.length) : method;
+    const prefix = `${this.config.prefix}__`.toLowerCase();
+    const incomingMethod = method.trim().toLowerCase();
+    const normalizedMethod = incomingMethod.startsWith(prefix)
+      ? incomingMethod.slice(prefix.length)
+      : incomingMethod;
     const tool = this.toolMap.get(normalizedMethod);
     if (!tool) throw new Error(`Tool desconhecida: ${method}`);
     const approved = this.rememberedApprovals.has(tool.name) || isAutomaticallyAllowed(this.config, tool, input);
