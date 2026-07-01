@@ -1,26 +1,43 @@
 # @skrbe/xcoder
 
-Agente local Node.js para dar ao Skrbe MCP Gateway capacidades de programação na máquina onde o pacote está instalado, usando o SkrbeCom Bridge como transporte.
+Agente local Node.js que conecta o Skrbe MCP Gateway à máquina onde o pacote está instalado, permitindo leitura e edição de arquivos, execução de comandos, Git, processos persistentes e automação de navegador com Playwright.
 
 ```text
-ChatGPT/agente -> MCP Gateway -> SkrbeCom Bridge -> @skrbe/xcoder -> máquina local
+ChatGPT/agente → MCP Gateway → SkrbeCom Bridge → @skrbe/xcoder → máquina local
 ```
 
-## Instalação
+> O XCoder executa com as permissões do usuário que iniciou o processo Node.js. Configure `SKRBE_ROOTS` e `SKRBE_PERMISSION` com cuidado.
+
+## Requisitos
+
+- Node.js `>= 20.11`
+- pnpm recomendado
+- Um token válido do SkrbeCom Bridge
+- Next.js com runtime Node.js, para a integração automática via `instrumentation.ts`
+
+## Getting started com pnpm
+
+### 1. Instale no novo projeto
+
+Na raiz do projeto:
 
 ```bash
-npm install -D github:willfeerr/xcoder#main
+pnpm add -D github:willfeerr/xcoder#main
 ```
 
-## Next.js: conectar automaticamente com o app
-
-Depois de instalar, execute uma vez:
+Para instalações reproduzíveis, fixe um commit específico:
 
 ```bash
-npx xcoder init next
+pnpm add -D github:willfeerr/xcoder#<commit-sha>
 ```
 
-O comando cria `instrumentation.ts` na raiz ou em `src/instrumentation.ts`:
+### 2. Configure a integração com Next.js
+
+```bash
+pnpm exec xcoder init next
+```
+
+O comando cria `instrumentation.ts` na raiz do projeto, ou `src/instrumentation.ts` quando o projeto usa `src/`:
 
 ```ts
 export async function register() {
@@ -31,36 +48,134 @@ export async function register() {
 }
 ```
 
-Configure `.env.local`:
+Caso o arquivo já exista, o comando não o substitui. Adicione a chamada ao `register()` existente.
+
+### 3. Configure o ambiente
+
+Crie ou atualize `.env.local`:
 
 ```env
 SKRBE_BRIDGE_URL=wss://bridge.example.com/agents
 SKRBE_BRIDGE_TOKEN=replace-me
 SKRBE_AGENT_ID=my-workstation
+
 SKRBE_WORKSPACE=.
 SKRBE_PERMISSION=ask
 SKRBE_ROOTS=.
 ```
 
-Reinicie o servidor:
+Configuração recomendada para começar:
 
-```bash
-npm run dev
+```env
+SKRBE_PERMISSION=ask
+SKRBE_ROOTS=.
 ```
 
-O XCoder passa a conectar junto com o processo Node do Next.js. Há um singleton global para evitar conexões duplicadas durante HMR.
+Ela mantém o agente limitado ao projeto atual e exige aprovação para operações.
 
-Caso já exista um `instrumentation.ts`, adicione a importação dinâmica ao `register()` existente em vez de substituí-lo.
+### 4. Instale o navegador do Playwright
 
-## Processo separado
-
-Também é possível executar sem integração com Next.js:
+O pacote inclui Playwright, mas o binário do navegador precisa ser instalado na máquina:
 
 ```bash
-npx xcoder
+pnpm dlx playwright@1.61.1 install chromium
 ```
 
-Ou:
+### 5. Inicie o projeto
+
+```bash
+pnpm dev
+```
+
+O XCoder conecta automaticamente quando o Next.js carrega `instrumentation.ts` no runtime Node.js.
+
+Durante HMR, um singleton global evita conexões duplicadas.
+
+## Instalação rápida
+
+```bash
+pnpm add -D github:willfeerr/xcoder#main
+pnpm exec xcoder init next
+pnpm dlx playwright@1.61.1 install chromium
+```
+
+Depois configure `.env.local` e execute:
+
+```bash
+pnpm dev
+```
+
+## Configuração de permissões
+
+### `ask`
+
+Todas as operações dependem de aprovação pelo Bridge.
+
+```env
+SKRBE_PERMISSION=ask
+```
+
+### `auto-approve`
+
+Leituras e comandos reconhecidos de diagnóstico e teste podem ser aprovados automaticamente. Operações mais sensíveis continuam protegidas.
+
+```env
+SKRBE_PERMISSION=auto-approve
+```
+
+O alias legado `auto-aprove` também é aceito.
+
+### `full-control`
+
+As tools são executadas automaticamente, mas continuam limitadas por `SKRBE_ROOTS`.
+
+```env
+SKRBE_PERMISSION=full-control
+SKRBE_ROOTS=.
+```
+
+### Acesso irrestrito à conta do usuário
+
+A configuração abaixo libera caminhos fora do projeto:
+
+```env
+SKRBE_PERMISSION=full-control
+SKRBE_ROOTS=*
+```
+
+Use somente quando acesso amplo à máquina for realmente necessário. O agente poderá operar qualquer caminho permitido ao usuário do sistema que iniciou o processo.
+
+## Workspace e roots
+
+`SKRBE_WORKSPACE` define o diretório inicial das operações relativas:
+
+```env
+SKRBE_WORKSPACE=.
+```
+
+`SKRBE_ROOTS` define os limites autorizados do filesystem:
+
+```env
+# Somente o projeto atual
+SKRBE_ROOTS=.
+
+# Acesso irrestrito aos caminhos permitidos pelo usuário do sistema
+SKRBE_ROOTS=*
+```
+
+A pasta de workspace não funciona como sandbox quando `SKRBE_ROOTS=*`.
+
+Depois de alterar essas variáveis, encerre completamente o servidor Next.js e inicie-o novamente.
+
+## Executar como processo separado
+
+O XCoder também pode funcionar sem integração com Next.js:
+
+```bash
+pnpm exec xcoder
+```
+
+Ou adicione um script ao `package.json`:
 
 ```json
 {
@@ -70,27 +185,154 @@ Ou:
 }
 ```
 
-## Permissões
+Depois execute:
 
-- `ask`: toda operação pede aprovação pelo Bridge.
-- `auto-approve`: leitura e comandos de diagnóstico/teste reconhecidos são automáticos.
-- `full-control`: todas as tools são automáticas, ainda respeitando `SKRBE_ROOTS`.
+```bash
+pnpm xcoder
+```
 
-O alias `auto-aprove` também é aceito.
+## Variáveis de ambiente
 
-Acesso irrestrito exige configuração explícita:
+| Variável | Obrigatória | Descrição |
+| --- | --- | --- |
+| `SKRBE_BRIDGE_TOKEN` | Sim | Token usado para autenticar a conexão com o Bridge. |
+| `SKRBE_BRIDGE_URL` | Conforme o ambiente | Endereço WebSocket do SkrbeCom Bridge. |
+| `SKRBE_AGENT_ID` | Recomendado | Identificador estável desta máquina ou agente. |
+| `SKRBE_WORKSPACE` | Não | Diretório inicial. Normalmente `.`. |
+| `SKRBE_PERMISSION` | Não | `ask`, `auto-approve` ou `full-control`. |
+| `SKRBE_ROOTS` | Não | Roots permitidos. Use `.` para o projeto ou `*` para acesso amplo. |
+
+Nunca faça commit do token. Garanta que `.env.local` esteja ignorado pelo Git.
+
+## Verificação
+
+Com o projeto em execução, confirme:
+
+1. O terminal não exibe erro de autenticação do XCoder.
+2. O agente aparece conectado no Skrbe MCP Gateway.
+3. As tools `xcoder__list_files`, `xcoder__read_file` e `xcoder__exec` aparecem no catálogo.
+4. `xcoder__list_files` com `path: "."` retorna a raiz do projeto esperado.
+
+Para conferir a CLI:
+
+```bash
+pnpm exec xcoder --help
+```
+
+## Atualização
+
+Para atualizar usando a branch `main`:
+
+```bash
+pnpm add -D github:willfeerr/xcoder#main --force
+```
+
+Para instalar uma revisão específica:
+
+```bash
+pnpm add -D github:willfeerr/xcoder#<commit-sha> --force
+```
+
+Depois reinicie o servidor Next.js. Caso existam artefatos antigos do framework:
+
+```bash
+rm -rf .next
+pnpm dev
+```
+
+## Problemas comuns
+
+### O agente não aparece no Gateway
+
+- Confirme `SKRBE_BRIDGE_TOKEN` e `SKRBE_BRIDGE_URL`.
+- Reinicie completamente o processo Next.js.
+- Confirme que `instrumentation.ts` está na raiz correta.
+- Verifique se o projeto está executando com runtime Node.js.
+
+### O comando `xcoder` não é encontrado
+
+Use o binário local pelo pnpm:
+
+```bash
+pnpm exec xcoder --help
+```
+
+### O navegador não inicia
+
+Instale o Chromium compatível:
+
+```bash
+pnpm dlx playwright@1.61.1 install chromium
+```
+
+### O agente acessa arquivos fora do projeto
+
+Confirme se existe:
 
 ```env
-SKRBE_PERMISSION=full-control
 SKRBE_ROOTS=*
 ```
 
-## Tools iniciais
+Para restringir novamente:
 
-- `fs.readFile`
-- `fs.list`
-- `fs.writeFile`
-- `fs.remove`
-- `process.exec`
+```env
+SKRBE_ROOTS=.
+SKRBE_PERMISSION=ask
+```
 
-O agente não usa MCP por `stdio` e não abre servidor local. Ele mantém uma conexão WebSocket autenticada de saída com o SkrbeCom Bridge.
+Reinicie o processo depois da alteração.
+
+### `instrumentation.ts` já existe
+
+Mantenha o código existente e adicione apenas a inicialização do XCoder:
+
+```ts
+export async function register() {
+  // Inicializações existentes...
+
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    const { startXCoder } = await import("@skrbe/xcoder/next");
+    startXCoder();
+  }
+}
+```
+
+## Capacidades
+
+O catálogo pode incluir, conforme a versão instalada:
+
+- leitura, listagem, criação, patch e remoção de arquivos;
+- execução de comandos no workspace;
+- processos persistentes e leitura de logs;
+- Git, branches, commits e worktrees;
+- validação de projetos;
+- automação Playwright;
+- screenshots, vídeo, traces, console e diagnóstico de rede.
+
+## Arquitetura
+
+O agente não usa MCP por `stdio` e não precisa abrir um servidor local. Ele mantém uma conexão WebSocket autenticada de saída com o SkrbeCom Bridge.
+
+```text
+┌────────────────────┐
+│ ChatGPT / agente   │
+└─────────┬──────────┘
+          │ MCP
+┌─────────▼──────────┐
+│ Skrbe MCP Gateway  │
+└─────────┬──────────┘
+          │ Bridge
+┌─────────▼──────────┐
+│ @skrbe/xcoder      │
+└─────────┬──────────┘
+          │
+┌─────────▼──────────┐
+│ Máquina local      │
+└────────────────────┘
+```
+
+Consulte também [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+
+## Licença
+
+MIT
