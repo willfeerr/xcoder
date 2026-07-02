@@ -1,0 +1,37 @@
+name: Test scriptless Git install
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm 11
+        run: |
+          corepack enable
+          corepack prepare pnpm@11 --activate
+          pnpm --version
+
+      - name: Create consumer workspace
+        run: |
+          mkdir consumer
+          printf 'packages:\n  - .\n' > consumer/pnpm-workspace.yaml
+          printf '{"name":"consumer","version":"1.0.0","private":true}\n' > consumer/package.json
+
+      - name: Install current commit
+        working-directory: consumer
+        run: pnpm add -Dw "github:${GITHUB_REPOSITORY}#${GITHUB_SHA}"
+
+      - name: Verify CLI
+        working-directory: consumer
+        run: pnpm exec xcoder --help
