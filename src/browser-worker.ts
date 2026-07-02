@@ -1,14 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import {
-  chromium,
-  firefox,
-  webkit,
-  type Browser,
-  type BrowserContext,
-  type Page,
-} from "playwright";
+import type { Browser, BrowserContext, Page } from "playwright";
 
 interface BrowserSession {
   id: string;
@@ -31,7 +24,23 @@ interface WorkerResponse {
   error?: string;
 }
 
+type PlaywrightModule = typeof import("playwright");
+
 const sessions = new Map<string, BrowserSession>();
+let playwrightModule: Promise<PlaywrightModule> | undefined;
+
+async function getPlaywright(): Promise<PlaywrightModule> {
+  playwrightModule ??= import("playwright").catch((error: unknown) => {
+    playwrightModule = undefined;
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      "As tools de navegador são opcionais. Instale-as com " +
+        "`pnpm add -D playwright@1.61.1 && pnpm exec playwright install chromium`. " +
+        `Detalhe: ${detail}`,
+    );
+  });
+  return playwrightModule;
+}
 
 function requiredString(input: Record<string, unknown>, key: string): string {
   const value = input[key];
@@ -79,6 +88,7 @@ function getSession(id: string): BrowserSession {
 async function execute(method: string, params: Record<string, unknown>): Promise<unknown> {
   switch (method) {
     case "open": {
+      const { chromium, firefox, webkit } = await getPlaywright();
       const name = optionalString(params, "browser", "chromium")!;
       const browserType = name === "firefox" ? firefox : name === "webkit" ? webkit : chromium;
       const browser = await browserType.launch({
@@ -234,6 +244,7 @@ async function execute(method: string, params: Record<string, unknown>): Promise
     }
 
     case "record": {
+      const { chromium, firefox, webkit } = await getPlaywright();
       const name = optionalString(params, "browser", "chromium")!;
       const browserType = name === "firefox" ? firefox : name === "webkit" ? webkit : chromium;
       const videoPath = requiredString(params, "path");
@@ -266,134 +277,42 @@ async function execute(method: string, params: Record<string, unknown>): Promise
         },
       });
 
-      const consoleMessages: Array<Record<string, unknown>> = [];
-      const networkEvents: Array<Record<string, unknown>> = [];
+      if (tracePath) {
+        await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+      }
+
       const page = await context.newPage();
-      const video = page.video();
-      const startedAt = Date.now();
-      let status: number | null = null;
-      let title = "";
-      let finalUrl = "";
-      let animationSummary: unknown = null;
-
-      page.on("console", (message) => {
-        consoleMessages.push({
-          type: message.type(),
-          text: message.text(),
-          at: new Date().toISOString(),
-        });
-      });
-      page.on("pageerror", (error) => {
-        consoleMessages.push({
-          type: "pageerror",
-          text: error.message,
-          at: new Date().toISOString(),
-        });
-      });
-      page.on("response", (response) => {
-        if (response.status() >= 400) {
-          networkEvents.push({
-            url: response.url(),
-            status: response.status(),
-            method: response.request().method(),
-          });
-        }
-      });
-      page.on("requestfailed", (request) => {
-        networkEvents.push({
-          url: request.url(),
-          method: request.method(),
-          error: request.failure()?.errorText,
-        });
-      });
-
       try {
-        if (tracePath) {
-          await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
-        }
-
         const response = await page.goto(requiredString(params, "url"), {
           waitUntil: "domcontentloaded",
           timeout: timeoutMs,
         });
-        status = response?.status() ?? null;
-        title = await page.title();
-        finalUrl = page.url();
 
-        await page.waitForTimeout(Math.min(1_500, Math.floor(durationMs / 4)));
-
-        if (autoScroll) {
-          const remaining = Math.max(0, durationMs - (Date.now() - startedAt));
-          await page.evaluate(
-            async ({ totalMs, step, intervalMs }) => {
-              const pageWindow = globalThis as any;
-              const started = pageWindow.performance.now();
-              let direction = 1;
-              while (pageWindow.performance.now() - started < totalMs) {
-                const maxScroll = Math.max(
-                  0,
-                  pageWindow.document.documentElement.scrollHeight - pageWindow.innerHeight,
-                );
-                const next = Math.min(
-                  maxScroll,
-                  Math.max(0, pageWindow.scrollY + step * direction),
-                );
-                pageWindow.scrollTo({ top: next, behavior: "smooth" });
-                if (next >= maxScroll) direction = -1;
-                if (next <= 0) direction = 1;
-                await new Promise((resolve) => setTimeout(resolve, intervalMs));
-              }
-            },
-            {
-              totalMs: remaining,
-              step: scrollStep,
-              intervalMs: scrollIntervalMs,
-            },
-          );
-        } else {
-          const remaining = Math.max(0, durationMs - (Date.now() - startedAt));
-          if (remaining > 0) await page.waitForTimeout(remaining);
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < durationMs) {
+          if (autoScroll) {
+            await page.evaluate((step) => window.scrollBy(0, step), scrollStep);
+          }
+          await page.waitForTimeout(scrollIntervalMs);
         }
-
-        animationSummary = await page.evaluate(() => {
-          const pageWindow = globalThis as any;
-          const animations = pageWindow.document.getAnimations() as Array<{ playState: string }>;
-          return {
-            total: animations.length,
-            running: animations.filter((animation) => animation.playState === "running").length,
-            paused: animations.filter((animation) => animation.playState === "paused").length,
-            finished: animations.filter((animation) => animation.playState === "finished").length,
-            scrollY: pageWindow.scrollY,
-            scrollHeight: pageWindow.document.documentElement.scrollHeight,
-            viewport: { width: pageWindow.innerWidth, height: pageWindow.innerHeight },
-          };
-        });
 
         if (tracePath) await context.tracing.stop({ path: tracePath });
+        const video = page.video();
         await context.close();
-        if (video) await video.saveAs(videoPath);
-        const stats = await fs.stat(videoPath);
-
+        const generatedPath = video ? await video.path() : undefined;
+        if (!generatedPath) throw new Error("O Playwright não gerou o vídeo esperado.");
+        await fs.copyFile(generatedPath, videoPath);
+        const stat = await fs.stat(videoPath);
         return {
-          browser: name,
-          url: finalUrl,
-          title,
-          status,
           path: videoPath,
           tracePath,
-          bytes: stats.size,
-          durationMs: Date.now() - startedAt,
-          animationSummary,
-          console: consoleMessages,
-          network: networkEvents,
+          bytes: stat.size,
+          browser: name,
+          status: response?.status() ?? null,
+          durationMs,
         };
-      } catch (error) {
-        if (tracePath) {
-          await context.tracing.stop({ path: tracePath }).catch(() => undefined);
-        }
-        await context.close().catch(() => undefined);
-        throw error;
       } finally {
+        await context.close().catch(() => undefined);
         await browser.close().catch(() => undefined);
         await fs.rm(temporaryVideoDir, { recursive: true, force: true }).catch(() => undefined);
       }
@@ -402,37 +321,23 @@ async function execute(method: string, params: Record<string, unknown>): Promise
     case "close": {
       const id = requiredString(params, "sessionId");
       const session = getSession(id);
+      sessions.delete(id);
       await session.context.close();
       await session.browser.close();
-      sessions.delete(id);
       return { sessionId: id, closed: true };
     }
 
     default:
-      throw new Error(`Operação Playwright desconhecida: ${method}`);
+      throw new Error(`Método de navegador não suportado: ${method}`);
   }
 }
 
-process.on("message", async (message: WorkerRequest) => {
-  if (!message || typeof message.id !== "string" || typeof message.method !== "string") return;
-  const response: WorkerResponse = { id: message.id };
+process.on("message", async (request: WorkerRequest) => {
+  const response: WorkerResponse = { id: request.id };
   try {
-    response.result = await execute(message.method, message.params ?? {});
+    response.result = await execute(request.method, request.params);
   } catch (error) {
-    response.error = error instanceof Error ? error.stack || error.message : String(error);
+    response.error = error instanceof Error ? error.message : String(error);
   }
-  process.send?.(response);
+  if (process.send) process.send(response);
 });
-
-async function shutdown(): Promise<void> {
-  await Promise.allSettled(
-    [...sessions.values()].map(async (session) => {
-      await session.context.close().catch(() => undefined);
-      await session.browser.close().catch(() => undefined);
-    }),
-  );
-  process.exit(0);
-}
-
-process.once("SIGINT", () => void shutdown());
-process.once("SIGTERM", () => void shutdown());

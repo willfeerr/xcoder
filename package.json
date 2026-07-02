@@ -1,6 +1,6 @@
 {
   "name": "@skrbe/xcoder",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Agente local de programação conectado ao SkrbeCom Bridge e MCP Gateway.",
   "type": "module",
   "bin": {
@@ -34,12 +34,20 @@
     "node": ">=20.11"
   },
   "dependencies": {
-    "playwright": "1.61.1",
     "ws": "^8.18.3"
+  },
+  "peerDependencies": {
+    "playwright": "1.61.1"
+  },
+  "peerDependenciesMeta": {
+    "playwright": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
     "@types/ws": "^8.18.1",
+    "playwright": "1.61.1",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3"
   },
