@@ -35,7 +35,7 @@ jobs:
           corepack prepare pnpm@10.12.1 --activate
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Build
         run: pnpm build
@@ -43,6 +43,7 @@ jobs:
       - name: Commit distribution
         shell: bash
         run: |
+          git add pnpm-lock.yaml
           git add -f dist
 
           if git diff --cached --quiet; then
