@@ -25,6 +25,18 @@ Na raiz do projeto:
 pnpm add -D github:willfeerr/xcoder#main
 ```
 
+Se o diretório atual for a raiz de um workspace pnpm e o XCoder deve ser instalado no pacote raiz, use `-w`:
+
+```bash
+pnpm add -Dw github:willfeerr/xcoder#main
+```
+
+Se o XCoder pertence somente a um app do monorepo, execute o comando dentro desse pacote ou use um filtro:
+
+```bash
+pnpm --filter <nome-do-pacote> add -D github:willfeerr/xcoder#main
+```
+
 Para instalações reproduzíveis, fixe um commit específico:
 
 ```bash
@@ -248,6 +260,24 @@ pnpm dev
 - Reinicie completamente o processo Next.js.
 - Confirme que `instrumentation.ts` está na raiz correta.
 - Verifique se o projeto está executando com runtime Node.js.
+
+### `ERR_PNPM_ADDING_TO_ROOT`
+
+Esse erro aparece quando o comando é executado na raiz de um workspace pnpm. Escolha onde o XCoder deve ser instalado.
+
+Na raiz do workspace:
+
+```bash
+pnpm add -Dw github:willfeerr/xcoder#main
+```
+
+Em um pacote específico:
+
+```bash
+pnpm --filter <nome-do-pacote> add -D github:willfeerr/xcoder#main
+```
+
+Ou entre no diretório do app e execute o comando sem `-w`.
 
 ### O comando `xcoder` não é encontrado
 
