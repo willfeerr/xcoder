@@ -1,6 +1,6 @@
 {
   "name": "@skrbe/xcoder",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Agente local de programação conectado ao SkrbeCom Bridge e MCP Gateway.",
   "type": "module",
   "bin": {
@@ -28,8 +28,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "prepack": "npm run build"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "engines": {
     "node": ">=20.11"
