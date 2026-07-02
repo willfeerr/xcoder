@@ -31,6 +31,19 @@ Se o diretório atual for a raiz de um workspace pnpm e o XCoder deve ser instal
 pnpm add -Dw github:willfeerr/xcoder#main
 ```
 
+No pnpm 11, pacotes Git que executam `prepare` precisam ser aprovados explicitamente. Instale o XCoder na raiz do workspace com:
+
+```bash
+pnpm add -Dw --allow-build=@skrbe/xcoder github:willfeerr/xcoder#main
+```
+
+Esse comando registra a aprovação em `pnpm-workspace.yaml`:
+
+```yaml
+allowBuilds:
+  '@skrbe/xcoder': true
+```
+
 Se o XCoder pertence somente a um app do monorepo, execute o comando dentro desse pacote ou use um filtro:
 
 ```bash
@@ -278,6 +291,33 @@ pnpm --filter <nome-do-pacote> add -D github:willfeerr/xcoder#main
 ```
 
 Ou entre no diretório do app e execute o comando sem `-w`.
+
+### `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`
+
+O XCoder é instalado diretamente do GitHub e usa `prepare` para gerar `dist/`. No pnpm 11, esse build precisa ser aprovado explicitamente:
+
+```bash
+pnpm add -Dw --allow-build=@skrbe/xcoder github:willfeerr/xcoder#main
+```
+
+Também é possível editar `pnpm-workspace.yaml` manualmente:
+
+```yaml
+allowBuilds:
+  '@skrbe/xcoder': true
+```
+
+Depois execute novamente:
+
+```bash
+pnpm install
+```
+
+Ou aprove builds pendentes de forma interativa:
+
+```bash
+pnpm approve-builds @skrbe/xcoder
+```
 
 ### O comando `xcoder` não é encontrado
 
